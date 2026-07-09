@@ -8,36 +8,36 @@ from utils import raster_utils
 LAYERS: dict[str, dict] = {
     "dem": {
         "config_key": "dem_copernicus",
-        "path": "input_data/dem.tif",
+        "path": "dem.tif",
         "is_slope": True,
         "fuzzy": "large",
-        "midpoint": 15.0, 
+        "midpoint": 15.0,
         "spread": 5.0
     },
     "forest_loss":{
         "config_key": "gfc_hansen",
-        "path": "input_data/forest_loss.tif",
+        "path": "forest_loss.tif",
         "fuzzy": "small",
         "midpoint": 500.0,
         "spread": 2.0
     },
     "lithology": {
         "config_key": "lithology_glim",
-        "path": "input_data/lithology.tif",
+        "path": "lithology.tif",
         "fuzzy": "large",
         "midpoint": 0.5,
         "spread": 2.0
     },
     "roads": {
         "config_key": "pois_osm",
-        "path": "input_data/roads.tif",
+        "path": "roads.tif",
         "fuzzy": "large",
         "midpoint": 100.0,
         "spread": 2.0
     },
     "seismology": {
         "config_key": "seismology_gemf",
-        "path": "input_data/seismology.tif",
+        "path": "seismology.tif",
         "fuzzy": "large",
         "midpoint": 0.5,
         "spread": 2.0
@@ -195,7 +195,7 @@ def main(config_path: Path) -> None:
     slope_key = next(n for n, s in LAYERS.items() if s.get("is_slope"))
     
     if save_intermediates:
-        slope_da = raster_utils.load_raster(LAYERS[slope_key]["processed_data"], layer_name="slope_fuzzy")
+        slope_da = raster_utils.load_raster(LAYERS[slope_key]["fuzzy_data"], layer_name="slope_fuzzy")
     else:
         slope_da = LAYERS[slope_key]["fuzzy_data"]
 

@@ -1,0 +1,10 @@
+pyyaml
+numpy
+scipy
+rasterio
+rioxarray
+xarray
+xarray-spatial
+geopandas
+pyproj
+dask

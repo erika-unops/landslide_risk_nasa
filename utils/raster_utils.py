@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 import tempfile
+import dask
 import numpy as np
 import rasterio
 import rioxarray  # noqa: F401  (registers the .rio accessor)
@@ -26,14 +27,26 @@ from rasterio.merge import merge as rio_merge
 
 import geopandas as gpd
 
+# GDAL/rasterio file handles are thread-affine; dask's default threaded
+# scheduler tears its worker threads down at interpreter exit and can end up
+# closing a handle from the wrong thread, which surfaces as noisy (but
+# harmless) "Error in sys.excepthook" spam on exit. Run compute graphs on the
+# main thread instead — chunks=True stays lazy, only the execution scheduler
+# changes.
+dask.config.set(scheduler="synchronous")
+
 
 # ---------------------------------------------------------------------------
 # Load rasters (point to a directory or a file path)
 # ---------------------------------------------------------------------------
 
 def load_raster(src, layer_name: str, tmp_dir: Path | None = None) -> xr.DataArray:
-    """Lazily open the GeoTIFFs in ``src_dir``, mosaicking first if there are many."""
-    if isinstance(src, Path):
+    """Lazily open the GeoTIFFs in ``src_dir``, mosaicking first if there are many.
+
+    ``src`` may be a directory (scanned for GeoTIFFs, mosaicking if there are
+    several) or a path to a single raster file, opened directly.
+    """
+    if isinstance(src, Path) and src.is_dir():
         images = collect_geotiffs(src)
         if not images:
             raise FileNotFoundError(f"No GeoTIFFs found in {src}")
@@ -491,6 +504,19 @@ def collect_geotiffs(
     geotiffs = [p for p in geotiffs if p.suffix.lower() in ('.tif', '.tiff')]
 
     return geotiffs
+
+
+# ---------------------------------------------------------------------------
+# Load a vector layer (point to a directory holding a plugin's output)
+# ---------------------------------------------------------------------------
+
+def load_vector(directory: str | Path, pattern: str = "*_combined.geojson") -> gpd.GeoDataFrame:
+    """Load the vector file matching ``pattern`` out of a plugin's output directory."""
+    directory = Path(directory)
+    matches = sorted(directory.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"No vector file matching {pattern!r} found in {directory}")
+    return gpd.read_file(matches[0])
 
 
 # ---------------------------------------------------------------------------

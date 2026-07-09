@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import geopandas as gpd
 import numpy as np
 import rioxarray
 import xarray as xr
@@ -44,7 +43,10 @@ CLIP_BUFFER_DEG = 0.02         # bbox buffer applied at the EPSG:4326 clip step
 
 # Layer registry. Order doesn't matter; exactly one layer must set is_reference.
 #   config_key   : top-level key in config.yaml whose `output_dir` holds the raw data
-#   resampling   : rioxarray resampling method (raster layers only)
+#   source       : "vector" for plugins whose output is rasterized onto the
+#                  reference grid instead of loaded as a GeoTIFF; omitted for
+#                  raster sources (the default)
+#   resampling   : rioxarray resampling method (raster sources only)
 #   feature      : optional post/pre-processing transform to apply
 #   is_reference : the layer whose grid every other layer is matched to
 
@@ -66,7 +68,7 @@ LAYERS: dict[str, dict] = {
     },
     "roads": {
         "config_key": "pois_osm",
-        "resampling": Resampling.nearest,
+        "source": "vector",
         "feature": "distance_to_features",
     },
     "seismology": {
@@ -203,22 +205,28 @@ def process_reference(layer_name: str, spec: dict, src_dir, bbox, save_intermedi
 
 def process_layer(layer_name: str, spec: dict, src_dir, reference, bbox, save_intermediates: bool = False, tmp_dir: Path | None = None):
     """Load, standardize, and optionally transform a single layer to the reference grid."""
-    da = raster_utils.load_raster(src_dir, layer_name, tmp_dir)
-    da = raster_utils.clip_to_bbox(da, bbox, buffer=CLIP_BUFFER_DEG)
-
     feature = spec.get("feature")
-    if feature:
-        handler = FEATURE_HANDLERS.get(feature)
-        if handler and handler["stage"] == "pre":
-            da = handler["func"](da)
 
-    da = raster_utils.reproject(
-        da,
-        match_raster=reference,
-        resampling=spec["resampling"],
-    )
+    if spec.get("source") == "vector":
+        gdf = raster_utils.load_vector(src_dir)
+        da = raster_utils.rasterize_vector(gdf, reference, all_touched=True)
+    else:
+        da = raster_utils.load_raster(src_dir, layer_name, tmp_dir)
+        da = raster_utils.clip_to_bbox(da, bbox, buffer=CLIP_BUFFER_DEG)
+
+        if feature:
+            handler = FEATURE_HANDLERS.get(feature)
+            if handler and handler["stage"] == "pre":
+                da = handler["func"](da)
+
+        da = raster_utils.reproject(
+            da,
+            match_raster=reference,
+            resampling=spec["resampling"],
+        )
+
     da = raster_utils.standardize_nodata(da, target_nodata=np.nan)
-    
+
     if save_intermediates:
         save_to_tmp(da, tmp_dir, f"{layer_name}")
 
@@ -234,12 +242,12 @@ def process_layer(layer_name: str, spec: dict, src_dir, reference, bbox, save_in
 # Main
 # ---------------------------------------------------------------------------
 
-def main(config_path: Path, save_intermediates: bool) -> None:
+def main(config_path: Path) -> None:
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    
+
     save_intermediates = config["save_intermediates"]
-    
+
     base_dir = config_path.parent
     bbox = tuple(float(x) for x in config["bbox"].split(","))
     out_dir = base_dir / "input_data"

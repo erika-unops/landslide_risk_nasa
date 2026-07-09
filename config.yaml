@@ -1,33 +1,31 @@
 bbox: 48.6571945,-18.4798807,49.5203134,-17.5481686
-data_root: ./raw_data
 save_intermediates: True
 
 
-plugins:
-  dem_copernicus:
-    product: GLO-30
-    output_dir: dem_copernicus/
+dem_copernicus:
+  product: GLO-30
+  output_dir: dem_copernicus/
 
-  gfc_hansen:
-    tiles:
-      - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_10S_040E.tif
-      - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_10S_050E.tif
-      - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_20S_040E.tif
-      - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_20S_050E.tif
-    output_dir: gfc_hansen/
+gfc_hansen:
+  links:
+    - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_10S_040E.tif
+    - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_10S_050E.tif
+    - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_20S_040E.tif
+    - https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/Hansen_GFC-2025-v1.13_lossyear_20S_050E.tif
+  output_dir: gfc_hansen/
 
-  lithology_glim:
-    output_dir: lithology_glim/
-    rasterize: true
-    resolution: 30
+lithology_glim:
+  output_dir: lithology_glim/
+  rasterize: true
+  resolution: 30
 
-  pois_osm:
-    output_dir: pois_osm/
-    tag_group: roads_landslide
-    tags_file: ./tags.json
-    output_file: roads_landslide
-    rasterize: True
+pois_osm:
+  output_dir: pois_osm/
+  tag_group: roads_landslide
+  tags_file: ../pois_osm/tags.json
+  output_file: roads_landslide
+  rasterize: True
 
-  seismology_gemf:
-    product: hazards
-    output_dir: seismology_gemf
+seismology_gemf:
+  product: hazards
+  output_dir: seismology_gemf
