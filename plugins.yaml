@@ -1,0 +1,25 @@
+plugins:
+  - name: dem_copernicus
+    repo: https://github.com/your-org/dem_copernicus.git
+    script: dem_copernicus.py
+    config_key: dem_copernicus
+
+  - name: gfc_hansen
+    repo: https://github.com/your-org/gfc_hansen.git
+    script: gfc_hansen.py
+    config_key: gfc_hansen
+
+  - name: lithology_glim
+    repo: https://github.com/your-org/lithology_glim.git
+    script: lithology_glim.py
+    config_key: lithology_glim
+
+  - name: pois_osm
+    repo: https://github.com/your-org/pois_osm.git
+    script: pois_osm.py
+    config_key: pois_osm
+
+  - name: seismology_gemf
+    repo: https://github.com/your-org/seismology_gemf.git
+    script: seismology_gemf.py
+    config_key: seismology_gemf
