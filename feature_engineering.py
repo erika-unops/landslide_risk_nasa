@@ -60,6 +60,7 @@ LAYERS: dict[str, dict] = {
     "forest_loss": {
         "config_key": "gfc_hansen",
         "resampling": Resampling.nearest,
+        "feature": "binarize_forest_loss",
     },
     "lithology": {
         "config_key": "lithology_glim",
@@ -122,17 +123,61 @@ def calculate_slope(da: xr.DataArray) -> xr.DataArray:
     return out
 
 def remap_lithology(da: xr.DataArray, mapping: dict[int, float] | None = None) -> xr.DataArray:
-    """Remap categorical pixel values; unmapped pixels become NaN."""
+    """Remap GLiM lithology classes to a susceptibility membership; unmapped -> NaN.
+
+    The output is fed straight into the gamma overlay with no fuzzy membership
+    function, mirroring Stanley & Kirschbaum Fig. 2, where the geologic ranking is
+    the only input without a Fuzzy Membership step: the rescaled rating *is* the
+    membership.
+
+    `mapping` gives GLiM class -> rock strength on a 1-7 scale (higher = stronger =
+    less susceptible), with 0 as a sentinel for "other" (water, ice, no-data).
+    """
     if mapping is None:
         mapping = {
-            0: 0, 1: 1, 2: 0, 3: 5, 4: 7, 5: 7, 6: 7, 7: 2,
-            8: 6, 9: 4, 10: 3, 11: 1, 12: 2, 13: 2, 14: 2, 15: 0,
+            0: 0, # No Data > Other
+            1: 1, # Evaporites > Weak Sedimentary
+            2: 0, # Ice and Glaciers > Other
+            3: 5, # Metamorphics > Metamorphic
+            4: 7, # Acid plutonic rocks > Pluton
+            5: 7, # Basic plutonic rocks > Pluton
+            6: 7, # Intermediate plutonic rocks > Pluton
+            7: 2, # Pyroclastics > Volcanic
+            8: 6, # Carbonate sedimentary rocks > Carbonate
+            9: 4, # Mixed sedimentary rocks > Mixed Sedimentary
+            10: 3, # Siliciclastic sedimentary rocks > Siliciclastic Sedimentary
+            11: 1, # Unconsolidated sediments > Weak Sedimentary
+            12: 2, # Acid volcanic rocks > Volcanic
+            13: 2, # Basic volcanic rocks > Volcanic
+            14: 2, # Intermediate volcanic rocks > Volcanic
+            15: 0, # Water Bodies > Other
         }
+
+    # Strength (1-7, higher = stronger) -> susceptibility, rescaled onto the 0.2-1.0
+    # span of S&K Table 3: their strongest rocks rate 0.2 and their weakest 1.0.
+    # Class 0 ("other") takes the 0.1 the paper gives its Null/Unknown materials.
+    #
+    # Nothing may reach exactly 0.0: gamma_fuzzy multiplies the memberships, so a
+    # single zero annihilates the pixel no matter what the other layers say. That is
+    # why Table 3 floors at 0.1 rather than assigning water bodies a literal zero.
+    susceptibility = {
+        k: round(0.2 + 0.8 * (7 - v) / 6, 2) if v > 0 else 0.1
+        for k, v in mapping.items()
+    }
 
     src = np.asarray(da.compute())
     out = np.full(src.shape, np.nan, dtype=np.float32)
-    for old, new in mapping.items():
+    for old, new in susceptibility.items():
         out[src == old] = new
+
+    # GLiM declares nodata = 0, so load_raster's masked=True has already turned class
+    # 0 into NaN by the time it reaches the loop above and it would drop out of the
+    # model entirely. Class 0 is a real category in the mapping ("other"), and in this
+    # AOI it is overwhelmingly flat inland water, so it takes the same rating as the
+    # other "other" classes. This handler runs at the "pre" stage, before reprojection,
+    # so NaN here is GLiM's own nodata and not a reprojection edge.
+    out[np.isnan(src)] = susceptibility[0]
+
     remapped = xr.DataArray(out, dims=da.dims, coords=da.coords)
     remapped.rio.write_crs(da.rio.crs, inplace=True)
     remapped.rio.write_transform(da.rio.transform(), inplace=True)
@@ -164,13 +209,41 @@ def distance_to_features(mask: xr.DataArray, feature_value: float = 1) -> xr.Dat
     out = out.expand_dims(dim="band")
     return out
 
+def binarize_forest_loss(da: xr.DataArray) -> xr.DataArray:
+    """Reduce Hansen GFC `lossyear` to binary forest-loss presence.
+
+    The band is a year index (0 = no loss; 1..N encode the year of a
+    stand-replacement event, 1 -> 2001). Stanley & Kirschbaum p.7 use presence or
+    absence of any loss rather than its date or extent, so any non-zero code is
+    loss and the year is discarded. That also means no release-specific ceiling is
+    needed: the encoding's top end is irrelevant to `> 0`.
+
+    Emits {0, 1}; `binary_fuzzy` in the heuristic model lifts the 0 off the floor
+    before the gamma overlay (see Fig. 2's `Fuzzy Membership (4)`).
+    """
+    arr = np.asarray(da.compute()).astype(np.float32)
+    out = np.where(np.isnan(arr), np.nan, (arr > 0).astype(np.float32))
+    binarized = xr.DataArray(out.astype(np.float32), dims=da.dims, coords=da.coords)
+    binarized.rio.write_crs(da.rio.crs, inplace=True)
+    binarized.rio.write_transform(da.rio.transform(), inplace=True)
+    binarized.rio.write_nodata(np.nan, inplace=True)
+    return binarized
+
 
 FEATURE_HANDLERS = {
     "calculate_slope": {"func": calculate_slope, "stage": "post"},
     "remap_lithology": {"func": remap_lithology, "stage": "pre"},
     "distance_to_features": {"func": distance_to_features, "stage": "post"},
-}
+    "binarize_forest_loss": {"func": binarize_forest_loss, "stage": "post"},
+    }
 
+
+def apply_feature(feature: str | None, stage: str, da: xr.DataArray) -> xr.DataArray:
+    """Run the named feature handler if it is registered for this stage."""
+    handler = FEATURE_HANDLERS.get(feature) if feature else None
+    if not handler or handler["stage"] != stage:
+        return da
+    return handler["func"](da)
 
 # ---------------------------------------------------------------------------
 # Per-layer pipelines
@@ -183,10 +256,7 @@ def process_reference(layer_name: str, spec: dict, src_dir, bbox, save_intermedi
     da = raster_utils.clip_to_bbox(da, bbox, buffer=CLIP_BUFFER_DEG)
 
     feature = spec.get("feature")
-    if feature:
-        handler = FEATURE_HANDLERS.get(feature)
-        if handler and handler["stage"] == "pre":
-            da = handler["func"](da)
+    da = apply_feature(feature, "pre", da)
 
     da = raster_utils.reproject(da, auto_utm=True, resampling=spec["resampling"])
     da = raster_utils.resample(da, TARGET_RESOLUTION_M, resampling=spec["resampling"])
@@ -195,10 +265,7 @@ def process_reference(layer_name: str, spec: dict, src_dir, bbox, save_intermedi
     if save_intermediates:
         save_to_tmp(da, tmp_dir, f"{layer_name}")
 
-    if feature:
-        handler = FEATURE_HANDLERS.get(feature)
-        if handler and handler["stage"] == "post":
-            da = handler["func"](da)
+    da = apply_feature(feature, "post", da)
 
     return da.compute()
 
@@ -214,10 +281,7 @@ def process_layer(layer_name: str, spec: dict, src_dir, reference, bbox, save_in
         da = raster_utils.load_raster(src_dir, layer_name, tmp_dir)
         da = raster_utils.clip_to_bbox(da, bbox, buffer=CLIP_BUFFER_DEG)
 
-        if feature:
-            handler = FEATURE_HANDLERS.get(feature)
-            if handler and handler["stage"] == "pre":
-                da = handler["func"](da)
+        da = apply_feature(feature, "pre", da)
 
         da = raster_utils.reproject(
             da,
@@ -230,10 +294,7 @@ def process_layer(layer_name: str, spec: dict, src_dir, reference, bbox, save_in
     if save_intermediates:
         save_to_tmp(da, tmp_dir, f"{layer_name}")
 
-    if feature:
-        handler = FEATURE_HANDLERS.get(feature)
-        if handler and handler["stage"] == "post":
-            da = handler["func"](da)
+    da = apply_feature(feature, "post", da)
 
     return da.compute() if hasattr(da, "compute") else da
 
