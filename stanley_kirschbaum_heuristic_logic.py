@@ -170,8 +170,9 @@ def gamma_fuzzy(arrays: list[xr.DataArray], gamma: float = 0.9) -> xr.DataArray:
 
 
 def susceptibility(slope: xr.DataArray, other_factors: xr.DataArray,
-                   thresholds: tuple = (0.11, 0.49, 0.671, 0.75)) -> xr.DataArray:
-    """Classify continuous susceptibility into 5 categories.
+                   thresholds: tuple = (0.11, 0.49, 0.671, 0.75)
+                   ) -> tuple[xr.DataArray, xr.DataArray]:
+    """Combine slope with the overlay and classify. Returns (classes, continuous).
 
     Categories (Stanley & Kirschbaum 2017):
         0 = No Data    (any input missing)
@@ -180,6 +181,16 @@ def susceptibility(slope: xr.DataArray, other_factors: xr.DataArray,
         3 = Moderate   (0.49 – 0.671)
         4 = High       (0.671 – 0.75)
         5 = Very High  (> 0.75)
+
+    Both outputs are returned because the continuous surface is not merely an
+    intermediate. These thresholds are quantiles of S&K's *global 1 km* map -- p.10
+    sets them so each class is about half the size of the one below, which makes
+    0.49 the 78th percentile of their distribution rather than a physical value.
+    Our 30 m distribution is different (their slope is the steepest gradient in a
+    kilometre; ours is the gradient of an actual hillside), so these breaks do not
+    partition our values the way they partition theirs, and the binning discards
+    most of the discrimination the finer grid bought. The classes are what compares
+    against the published map; the continuous surface is what carries the detail.
     """
     # Capture spatial metadata up front. Plain xarray ops (arithmetic,
     # xr.where, reductions) are not CRS-aware and drop rioxarray's spatial_ref
@@ -221,7 +232,11 @@ def susceptibility(slope: xr.DataArray, other_factors: xr.DataArray,
     classes = classes.rio.write_transform(transform)
     classes.rio.write_nodata(NODATA_CLASS, inplace=True)
 
-    return classes
+    susc_continuous = susc_continuous.rio.write_crs(crs)
+    susc_continuous = susc_continuous.rio.write_transform(transform)
+    susc_continuous.rio.write_nodata(np.nan, inplace=True)
+
+    return classes, susc_continuous
 
 
 def main(config_path: Path) -> None:
@@ -297,8 +312,12 @@ def main(config_path: Path) -> None:
 
     # Final Susceptibility
     print("Calculating final susceptibility categories...")
-    susc_classes = susceptibility(slope_da, gamma_da)
-    
+    susc_classes, susc_continuous = susceptibility(slope_da, gamma_da)
+
+    continuous_path = output_dir / "susceptibility_continuous.tif"
+    susc_continuous.rio.to_raster(continuous_path)
+    print(f"  continuous surface saved to {continuous_path}")
+
     output_path = output_dir / "susceptibility.tif"
     susc_classes.rio.to_raster(output_path)
     print(f"Processing complete. Output saved to {output_path}")
